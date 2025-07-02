@@ -1,0 +1,12 @@
+[project]
+name = "3d-dwa-simulation"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "coppeliasim-zmqremoteapi-client>=2.0.4",
+    "matplotlib>=3.10.3",
+    "numpy>=2.2.6",
+    "opencv-python>=4.11.0.86",
+]
