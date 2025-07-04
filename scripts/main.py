@@ -16,11 +16,16 @@ sim.loadScene(scene_path)
 depth_cam_handle = sim.getObject('/Helicopter/kinect/depth')
 color_cam_handle = sim.getObject('/Helicopter/kinect/rgb')
 
+
 sim.startSimulation()
 while sim.getSimulationTime() < 10:
     # Get images from Kinect cameras each step
-    depth_image = sim.getVisionSensorDepth(depth_cam_handle)
+    depth_image, [depth_resolution_x, depth_resolution_y] = sim.getVisionSensorDepth(depth_cam_handle)
     color_image, [rgb_resolution_x, rgb_resolution_y] = sim.getVisionSensorImg(color_cam_handle)
+    depth_value = sim.unpackFloatTable(depth_image)
+
+    depth_image = np.array(depth_value, dtype=np.float32).reshape((depth_resolution_y, depth_resolution_x))
+    cv2.imshow('Depth Image', depth_image)
 
     # Process color image
     color_image = np.frombuffer(color_image, dtype=np.uint8).reshape(rgb_resolution_y, rgb_resolution_x, 3)
