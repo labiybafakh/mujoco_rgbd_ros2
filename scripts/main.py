@@ -1,39 +1,55 @@
-import os
-from time import sleep
-from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+import genesis as gs
 import numpy as np
-import cv2
 
-project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-scene_path = os.path.join(project_dir, "scene", "env_helicopter.simscene.xml")
+gs.init(backend=gs.cpu)
 
-client = RemoteAPIClient()
-sim = client.getObject('sim')
-sim.loadScene(scene_path)
+scene = gs.Scene(
+    show_viewer = True,
+    viewer_options = gs.options.ViewerOptions(
+        res           = (1280, 960),
+        camera_pos    = (3.5, 0.0, 2.5),
+        camera_lookat = (0.0, 0.0, 0.5),
+        camera_fov    = 40,
+        max_FPS       = 120,
+    ),
+    vis_options = gs.options.VisOptions(
+        show_world_frame = True,
+        world_frame_size = 1.0,
+        show_link_frame  = True,
+        show_cameras     = True,
+        plane_reflection = True,
+        ambient_light    = (0.1, 0.1, 0.1),
+    ),
+    renderer=gs.renderers.Rasterizer(),
+)
 
+plane = scene.add_entity(
+    gs.morphs.Plane(),
+)
 
-# Get handles for Kinect cameras using absolute paths
-depth_cam_handle = sim.getObject('/Helicopter/kinect/depth')
-color_cam_handle = sim.getObject('/Helicopter/kinect/rgb')
+box = scene.add_entity(
+    morph = gs.morphs.Box(
+        size= (0.5, 0.5, 0.5), 
+        pos= (0.0, 0.0, 0.0),
+        )
+    ,
+)
 
+cam = scene.add_camera(
+    res    = (640, 480),
+    pos    = (3.5, 0.0, 2.5),
+    lookat = (0, 0, 0.5),
+    fov    = 30,
+    GUI    = True,
+)
 
-sim.startSimulation()
-while sim.getSimulationTime() < 10:
-    # Get images from Kinect cameras each step
-    depth_image, [depth_resolution_x, depth_resolution_y] = sim.getVisionSensorDepth(depth_cam_handle)
-    color_image, [rgb_resolution_x, rgb_resolution_y] = sim.getVisionSensorImg(color_cam_handle)
-    depth_value = sim.unpackFloatTable(depth_image)
+scene.build()
 
-    depth_image = np.array(depth_value, dtype=np.float32).reshape((depth_resolution_y, depth_resolution_x))
-    cv2.imshow('Depth Image', depth_image)
-
-    # Process color image
-    color_image = np.frombuffer(color_image, dtype=np.uint8).reshape(rgb_resolution_y, rgb_resolution_x, 3)
-    color_image = cv2.flip(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB), 0)
-    cv2.imshow('RGB Image', color_image)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-    sleep(0.01)
-sim.stopSimulation()
+for i in range(300):
+    scene.step()
+    cam.set_pose(
+        transform = np.eye(4)
+    )
+    rgb, depth, segmentation, normal = cam.render(rgb=True, depth=True, segmentation=True, normal=True)
+    
+    
