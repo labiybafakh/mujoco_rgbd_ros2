@@ -42,25 +42,43 @@ obstacle_1 = scene.add_entity(
     morph = gs.morphs.Cylinder(
         height = 8.0,
         radius = 0.5,
-        pos= (5.0, 0.0, 0.0),
+        pos= (7.0, 0.0, 0.0),
         fixed= True,
     ),
 )
 
-cylinder_2 = scene.add_entity(
+obstacle_2 = scene.add_entity(
     morph = gs.morphs.Cylinder(
         height = 5.0,
         radius = 0.6,
-        pos= (7.0, -3.0, 0.0),
+        pos= (9.0, -5.0, 0.0),
         fixed= True,
     ),
 )
 
-cylinder_3 = scene.add_entity(
+obstacle_3 = scene.add_entity(
     morph = gs.morphs.Cylinder(
         height = 3.0,
-        radius = 0.3,
-        pos= (2.0, 2.0, 0.0),
+        radius = 0.6,
+        pos= (4.0, 2.0, 0.0),
+        fixed= True,
+    ),
+)
+
+obstacle_4 = scene.add_entity(
+    morph = gs.morphs.Cylinder(
+        height = 10.0,
+        radius = 1.0,
+        pos= (12.0, 4.5, 0.0),
+        fixed= True,
+    ),
+)
+
+obstacle_5 = scene.add_entity(
+    morph = gs.morphs.Cylinder(
+        height = 10.0,
+        radius = 1.0,
+        pos= (14.0, 0.0, 0.0),
         fixed= True,
     ),
 )
@@ -83,13 +101,12 @@ robot = FlappingRobot(
 )
 
 # Simulation loop
-for i in range(1000):  # 12 seconds at 0.01s timestep
+for i in range(600):  # 12 seconds at 0.01s timestep
     # Update robot dynamics
     robot.step()
     
     # # Get camera transformation from robot
     camera_transform = robot.get_camera_transform()
-    print(camera_transform)
     cam.set_pose(transform=camera_transform)
     
     # Step simulation
