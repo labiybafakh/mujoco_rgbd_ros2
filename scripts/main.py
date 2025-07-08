@@ -5,7 +5,7 @@ import math
 from robot import FlappingRobot
 
 # Initialize Genesis
-gs.init(backend=gs.gpu) # Use Metal Performance Shaders for GPU acceleration on macOS
+gs.init(backend=gs.cpu) # Use Metal Performance Shaders for GPU acceleration on macOS
 
 
 scene = gs.Scene(
@@ -30,6 +30,7 @@ scene = gs.Scene(
         ambient_light = (0.1, 0.1, 0.1),
     ),
     renderer=gs.renderers.Rasterizer(),
+    show_FPS = False,
 )
 
 # Add environment
@@ -82,12 +83,13 @@ robot = FlappingRobot(
 )
 
 # Simulation loop
-for i in range(300):  # 12 seconds at 0.01s timestep
+for i in range(1000):  # 12 seconds at 0.01s timestep
     # Update robot dynamics
     robot.step()
     
     # # Get camera transformation from robot
     camera_transform = robot.get_camera_transform()
+    print(camera_transform)
     cam.set_pose(transform=camera_transform)
     
     # Step simulation
@@ -100,18 +102,17 @@ for i in range(300):  # 12 seconds at 0.01s timestep
     cv2.imshow("Depth Map", normalized)
     
     # Print status every second
-    if i % 100 == 0:
-        status = robot.get_status()
-        print(f"Time: {status['time']:.2f}s, "
-              f"Robot Pos: ({status['position'][0]:.2f}, {status['position'][1]:.2f}, {status['position'][2]:.2f}), "
-              f"Roll: {status['attitude_deg'][0]:.1f}°, "
-              f"Pitch: {status['attitude_deg'][1]:.1f}°")
-        
-        # Debug: print camera transform
-        cam_transform = robot.get_camera_transform()
-        cam_pos = cam_transform[:3, 3]
-        print(f"Camera Pos: ({cam_pos[0]:.2f}, {cam_pos[1]:.2f}, {cam_pos[2]:.2f})")
-        print(f"Robot moving +X: {status['position'][0] > -2.0}, Camera moving -Y: {cam_pos[1] < 0.8}")
+    status = robot.get_status()
+    print(f"Time: {status['time']:.2f}s, "
+            f"Robot Pos: ({status['position'][0]:.2f}, {status['position'][1]:.2f}, {status['position'][2]:.2f}), "
+            f"Roll: {status['attitude_deg'][0]:.1f}°, "
+            f"Pitch: {status['attitude_deg'][1]:.1f}°")
+    
+    # Debug: print camera transform
+    cam_transform = robot.get_camera_transform()
+    cam_pos = cam_transform[:3, 3]
+    print(f"Camera Pos: ({cam_pos[0]:.2f}, {cam_pos[1]:.2f}, {cam_pos[2]:.2f})")
+    print(f"Robot moving +X: {status['position'][0] > -2.0}, Camera moving -Y: {cam_pos[1] < 0.8}")
     
     # Exit condition
     if cv2.waitKey(1) & 0xFF == ord('q'):

@@ -12,7 +12,7 @@ class FlappingRobot:
         self.g = 9.81
         
         # Flight parameters
-        self.v_forward_base = 0.4  # base forward velocity (m/s)
+        self.v_forward_base = 3.5  # base forward velocity (m/s)
         self.k_tail = 0.1         # tail effectiveness
         
         # SIMULATION CAMERA ADJUSTMENT (not for real robot)
@@ -38,20 +38,12 @@ class FlappingRobot:
         - Avoidance phase (6-9s): peak roll of ±40°
         - Recovery phase (9s+): return to 0°
         """
-        if t < 6.0:
-            return math.radians(-2.0)  # slight baseline roll
-        elif t <= 9.0:
-            # Avoidance maneuver - exponential profile
-            t_center = 7.5
-            sigma = 0.6
-            roll_max = 40.0  # degrees
-            roll_factor = math.exp(-((t - t_center) / sigma) ** 2)
-            return math.radians(-roll_max * roll_factor)  # negative for right turn
+        if t < 0.5:
+            return math.radians(0.0)  # slight baseline roll
+        elif t <= 2.0:
+            return math.radians(30.0)  # negative for right turn
         else:
-            # Recovery phase - exponential decay back to cruise
-            decay_rate = 2.0
-            remaining_roll = -2.0 * math.exp(-decay_rate * (t - 9.0))
-            return math.radians(remaining_roll)
+            return math.radians(-30.0)
     
     def get_tail_pitch_angle(self, t):
         """
@@ -61,7 +53,7 @@ class FlappingRobot:
         base_pitch = math.radians(30.0)  # 30 degrees base pitch
         
         # Additional compensation during avoidance maneuver
-        if 6.0 <= t <= 9.0:
+        if 2.0 <= t <= 3.0:
             # Slight adjustment during aggressive maneuvers
             maneuver_compensation = math.radians(5.0) * abs(math.sin((t - 6.0) * math.pi / 3.0))
             return base_pitch + maneuver_compensation
@@ -126,26 +118,46 @@ class FlappingRobot:
         self.position[0] += v_forward * self.dt
         
         # DISABLED: Lateral motion from wing roll
-        # a_lateral = self.g * math.tan(self.wing_roll)
-        # self.velocity[1] += a_lateral * self.dt
-        # self.position[1] += self.velocity[1] * self.dt
+        a_lateral = self.g * math.tan(self.wing_roll)
+        self.velocity[1] += a_lateral * self.dt
+        self.position[1] += self.velocity[1] * self.dt
         
         # DISABLED: Altitude control with tail pitch
-        # self.position[2] += v_forward * math.sin(self.tail_pitch) * self.dt
+        # if self.tail_pitch > 28.0 and self.tail_pitch < 33.0:  # avoid small pitch oscillations
+        self.position[2] == self.position[2]  # maintain altitude
+        # else:
+        #     self.position[2] += v_forward * math.sin(self.tail_pitch) * self.dt
         
         # DISABLED: Update attitude
-        # self.attitude[0] = self.wing_roll + roll_osc  # roll
-        # self.attitude[1] = self.tail_pitch + pitch_osc  # pitch
+        self.attitude[0] = self.wing_roll + roll_osc  # roll
+
+        if self.tail_pitch > 28.0 and self.tail_pitch < 33.0:  # avoid small pitch oscillations
+            self.attitude[1] = self.tail_pitch
+        else:
+            self.attitude[1] = self.tail_pitch + pitch_osc  # pitch
         
         # DISABLED: Yaw from coordinated turn
-        # if v_forward > 0.1:  # avoid division by zero
-        #     yaw_rate = self.g * math.tan(self.wing_roll) / v_forward
-        #     self.attitude[2] += yaw_rate * self.dt  # yaw
+        if v_forward > 0.1:  # avoid division by zero
+            yaw_rate = self.g * math.tan(self.wing_roll) / v_forward
+            self.attitude[2] += yaw_rate * self.dt  # yaw
         
         # DISABLED: Convert to quaternion
-        # self.quaternion = self.euler_to_quaternion(
-        #     self.attitude[0], self.attitude[1], self.attitude[2]
-        # )
+        self.quaternion = self.euler_to_quaternion(
+            self.attitude[0], self.attitude[1], self.attitude[2]
+        )
+
+    def euler_to_rotation_matrix(roll, pitch, yaw):
+        """Convert Euler angles to a 3x3 rotation matrix"""
+        cr, cp, cy = math.cos(roll), math.cos(pitch), math.cos(yaw)
+        sr, sp, sy = math.sin(roll), math.sin(pitch), math.sin(yaw)
+
+        R = np.array([
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr]
+        ])
+        
+        return R
     
     def get_camera_transform(self):
         """Get 4x4 transformation matrix for camera"""
@@ -187,6 +199,8 @@ class FlappingRobot:
         # [R R R T]        transform[:3, 3] = translation
         # [0 0 0 1]        bottom row always [0,0,0,1]
         transform = np.eye(4)
+        transform_camera_to_robot = np.eye(4)
+
         
         # Apply simulation camera adjustment if enabled
         if self.use_simulation_camera_adjustment:
@@ -201,16 +215,16 @@ class FlappingRobot:
             
             # Camera rotation quaternion: X+90°, Z-90°
             # Convert to radians and create quaternion
-            roll_x = math.radians(90)   # X-axis rotation +90° (roll camera)
+            roll_x = math.radians(90 + self.wing_roll)   # X-axis rotation +90° (roll camera)
             pitch_y = math.radians(0)   # Y-axis rotation 0° (no pitch)
-            yaw_z = math.radians(-90)   # Z-axis rotation -90° (yaw camera)
+            yaw_z = math.radians(-90 + (self.tail_pitch - 30.0))   # Z-axis rotation -90° (yaw camera)
             
             # Create quaternion for combined rotation
             sim_quaternion = self.euler_to_quaternion(roll_x, pitch_y, yaw_z)
             
             # Convert quaternion to rotation matrix
             sim_rotation = self.quaternion_to_rotation_matrix(sim_quaternion)
-            
+
             # Set rotation part of transform matrix (top-left 3x3)
             transform[:3, :3] = sim_rotation
             # Set translation part of transform matrix (top-right 3x1)
@@ -221,7 +235,7 @@ class FlappingRobot:
             rotation_matrix = self.quaternion_to_rotation_matrix(self.quaternion)
             transform[:3, :3] = rotation_matrix
             transform[:3, 3] = self.position
-        
+
         return transform
     
     def step(self, dt=None):
