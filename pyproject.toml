@@ -5,13 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "genesis-world",
     "open3d>=0.19.0",
     "opencv-python>=4.11.0.86",
-    "torch>=2.7.1",
-    "torchaudio>=2.7.1",
-    "torchvision>=0.22.1",
+    "pybullet>=3.2.7",
 ]
-
-[tool.uv.sources]
-genesis-world = { git = "https://github.com/Genesis-Embodied-AI/Genesis.git" }
