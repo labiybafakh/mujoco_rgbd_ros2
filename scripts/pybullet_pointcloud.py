@@ -1,17 +1,16 @@
 import pybullet as p
 import pybullet_data
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import time
-import math
+import matplotlib.pyplot as plt
 
 # Import robot and camera utilities
 from robot import FlappingRobot
 from camera_utils import (
     create_robot_motion_camera,
     create_picoflexx2_processor,
-    PointCloudSaver
+    PointCloudSaver,
+    PointCloudViewer
 )
 
 class PyBulletPointCloud:
@@ -47,16 +46,13 @@ class PyBulletPointCloud:
         # Add multiple obstacles in front of camera (positioned at 0,0,2.0 looking forward)
         self.obstacles = []
         
-        # Box obstacles in front (positive Y direction from camera)
+        # Box obstacles in front (positive X direction from camera)
         box_positions = [
-            [0.5, 1.5, 0.5],    # Front right
-            [-0.5, 1.5, 0.5],   # Front left
-            [0, 2.5, 0.5],      # Center far
-            [1.0, 2.0, 0.5],    # Right far
-            [-1.0, 2.0, 0.5]    # Left far
+            [1.5, -0.5, 0.5],   # Front right
+            [1.5, 0.5, 0.5],    # Front left
         ]
         
-        for i, pos in enumerate(box_positions):
+        for pos in box_positions:
             box_collision = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.3, 0.3, 0.5])
             box_visual = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.3, 0.3, 0.5], 
                                            rgbaColor=[0.8, 0.2, 0.2, 1.0])
@@ -66,12 +62,10 @@ class PyBulletPointCloud:
         
         # Cylinder obstacles in front
         cylinder_positions = [
-            [0.8, 1.2, 0.5],    # Close right
-            [-0.8, 1.2, 0.5],   # Close left
-            [0, 3.0, 0.5]       # Far center
+            [2.5, 0, 0.5]       # Center far
         ]
         
-        for i, pos in enumerate(cylinder_positions):
+        for pos in cylinder_positions:
             cylinder_collision = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.25, height=1.0)
             cylinder_visual = p.createVisualShape(p.GEOM_CYLINDER, radius=0.25, length=1.0,
                                                 rgbaColor=[0.2, 0.8, 0.2, 1.0])
@@ -81,13 +75,10 @@ class PyBulletPointCloud:
         
         # Sphere obstacles in front at different heights
         sphere_positions = [
-            [0.3, 1.0, 0.2],    # Close right, low 
-            [-0.3, 1.0, 0.2],   # Close left, low
-            [0, 1.8, 0.8],      # Center, elevated
-            [1.2, 3.5, 0.3]     # Far right
+            [1.8, 0, 0.8],      # Center, elevated
         ]
         
-        for i, pos in enumerate(sphere_positions):
+        for pos in sphere_positions:
             sphere_collision = p.createCollisionShape(p.GEOM_SPHERE, radius=0.2)
             sphere_visual = p.createVisualShape(p.GEOM_SPHERE, radius=0.2,
                                               rgbaColor=[0.2, 0.2, 0.8, 1.0])
@@ -99,7 +90,7 @@ class PyBulletPointCloud:
         # Use the processor's camera matrix method
         return self.pc_processor.get_camera_matrices(camera_pos, camera_target, camera_up)
     
-    def capture_pointcloud(self, camera_pos=[3, 3, 2], camera_target=[0, 0, 0]):
+    def capture_pointcloud(self, camera_pos=[0, 0, 2], camera_target=[1.5, 0, 1.8]):
         # Use processor for everything - cleaner approach
         camera_up = [0, 0, 1]
         
@@ -108,7 +99,7 @@ class PyBulletPointCloud:
         
         # Generate point cloud using processor
         points = self.pc_processor.depth_to_pointcloud(depth, camera_pos, camera_target, camera_up)
-        colors = self.pc_processor.get_point_colors(rgb_img, depth)
+        colors = self.pc_processor.get_point_colors(rgb_img, depth, camera_pos)
         
         # Debug information
         print(f"Depth range: {np.min(depth):.3f} to {np.max(depth):.3f}")
@@ -153,7 +144,7 @@ class PyBulletPointCloud:
         
         # Generate point cloud
         points = self.pc_processor.depth_to_pointcloud(depth, camera_pos, camera_target, camera_up)
-        colors = self.pc_processor.get_point_colors(rgb_img, depth)
+        colors = self.pc_processor.get_point_colors(rgb_img, depth, camera_pos)
         
         # Get robot attitude for logging
         roll_deg, pitch_deg, yaw_deg = self.camera_controller.get_robot_attitude_degrees()
@@ -207,7 +198,7 @@ class PyBulletPointCloud:
                     
                     result = self.capture_pointcloud_robot_motion()
                     if result[0] is not None:
-                        points, colors, rgb_img, depth, pose_info = result
+                        points, colors, _, _, pose_info = result
                         camera_pos, roll_deg, pitch_deg, yaw_deg = pose_info
                         
                         # Store data
@@ -218,8 +209,13 @@ class PyBulletPointCloud:
                         filename = f"robot_motion_pointcloud_{capture_count+1:03d}.ply"
                         PointCloudSaver.save_ply(points, colors, filename)
                         
-                        # Visualize
-                        self.visualize_pointcloud(points, colors, f"Robot Motion t={self.robot.time:.2f}s")
+                        # Update threaded viewer
+                        if not hasattr(self, 'viewer'):
+                            self.viewer = PointCloudViewer()
+                            self.viewer.start_threaded_viewer("Robot Motion Point Cloud Stream")
+                        
+                        self.viewer.update_viewer(points, colors)
+                        print(f"Updated viewer with {len(points)} points at t={self.robot.time:.2f}s")
                         
                         last_capture_time = self.robot.time
                         capture_count += 1
@@ -275,25 +271,35 @@ def main():
         
         # Capture point cloud from static viewpoints
         viewpoints = [
-            ([0, 0, 2.0], [0, 1.5, 1.8]),    # Looking forward slightly down
-            ([0, 0, 2.0], [0.5, 1.5, 1.8]),  # Looking forward-right
-            ([0, 0, 2.0], [-0.5, 1.5, 1.8]), # Looking forward-left
-            ([0, 0, 2.0], [0, 2.0, 1.0])     # Looking forward-down more
+            ([0, 0, 2.0], [1.5, 0, 1.8]),    # Looking forward slightly down
+            ([0, 0, 2.0], [1.5, -0.5, 1.8]), # Looking forward-right
+            ([0, 0, 2.0], [1.5, 0.5, 1.8]),  # Looking forward-left
+            ([0, 0, 2.0], [2.0, 0, 1.0])     # Looking forward-down more
         ]
         
-        for i, (camera_pos, camera_target) in enumerate(viewpoints):
-            print(f"Capturing point cloud from viewpoint {i+1}...")
-            
-            # Capture point cloud using original method
-            points, colors, rgb_img, depth = pc_generator.capture_pointcloud(camera_pos, camera_target)
-            
-            print(f"Generated {len(points)} points")
-            
-            # Save point cloud
-            PointCloudSaver.save_ply(points, colors, f"pointcloud_view_{i+1}.ply")
-            
-            # Visualize point cloud
-            pc_generator.visualize_pointcloud(points, colors, f"Point Cloud - View {i+1}")
+        # Create and start threaded viewer
+        viewer = PointCloudViewer()
+        viewer.start_threaded_viewer("Point Cloud Stream")
+        
+        try:
+            for i, (camera_pos, camera_target) in enumerate(viewpoints):
+                print(f"Capturing point cloud from viewpoint {i+1}...")
+                
+                # Capture point cloud using original method
+                points, colors, _, _ = pc_generator.capture_pointcloud(camera_pos, camera_target)
+                
+                print(f"Generated {len(points)} points")
+                
+                # Update viewer with new data
+                viewer.update_viewer(points, colors)
+                
+                # Small delay between captures
+                time.sleep(2.0)
+                
+        except KeyboardInterrupt:
+            print("\nInterrupted by user")
+        finally:
+            viewer.stop_viewer()
         
         # Keep simulation running
         print("Point cloud generation complete!")

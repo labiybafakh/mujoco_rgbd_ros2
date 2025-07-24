@@ -6,6 +6,10 @@ Handles camera pose calculation and robot attitude integration
 import numpy as np
 import math
 import pybullet as p
+import open3d as o3d
+import threading
+import queue
+import time
 
 class CameraMotionController:
     """Handles camera movement based on robot motion model"""
@@ -187,7 +191,14 @@ class PointCloudProcessor:
         right = right / np.linalg.norm(right)
         up = np.cross(right, forward)
         
-        rotation_matrix = np.array([right, -up, forward]).T
+        # Correct rotation matrix for camera-to-world transformation
+        # Camera coordinates: X=right, Y=down, Z=forward (depth)
+        # World coordinates: X=right, Y=forward, Z=up
+        rotation_matrix = np.array([
+            [right[0], -up[0], forward[0]],
+            [right[1], -up[1], forward[1]], 
+            [right[2], -up[2], forward[2]]
+        ])
         
         # Apply transformation
         points_world = np.dot(points_cam, rotation_matrix.T) + camera_pos
@@ -204,22 +215,331 @@ class PointCloudProcessor:
         
         return points_filtered
     
-    def get_point_colors(self, rgb_img, depth):
+    def get_point_colors(self, rgb_img, depth, camera_pos):
         """
         Extract colors for valid points from RGB image
         
         Args:
             rgb_img: RGB image from PyBullet
             depth: Depth array (height x width)
+            camera_pos: Camera position for distance filtering
             
         Returns:
             np.array: Color array (N x 3) with values 0-1
         """
         # Convert RGB image to point colors
         rgb_array = np.array(rgb_img).reshape(self.height, self.width, 4)[:, :, :3]  # Remove alpha channel
+        
+        # Apply same filtering as in depth_to_pointcloud
         valid_mask = (depth > self.near) & (depth < (self.far * 0.95)) & np.isfinite(depth)
-        colors = rgb_array[valid_mask].reshape(-1, 3) / 255.0
-        return colors
+        colors_initial = rgb_array[valid_mask].reshape(-1, 3) / 255.0
+        
+        # Apply additional realistic distance filtering to match points
+        if len(colors_initial) > 0:
+            # Get corresponding points for distance check
+            fx = self.width / (2 * np.tan(np.radians(self.fov_horizontal) / 2))
+            fy = self.height / (2 * np.tan(np.radians(self.fov_vertical) / 2))
+            cx = self.width / 2
+            cy = self.height / 2
+            
+            u, v = np.meshgrid(np.arange(self.width), np.arange(self.height))
+            x = (u - cx) * depth / fx
+            y = (v - cy) * depth / fy
+            z = depth
+            points_cam = np.stack([x, y, z], axis=-1)
+            points_filtered_cam = points_cam[valid_mask].reshape(-1, 3)
+            
+            # Calculate distances same as in depth_to_pointcloud
+            distance_from_camera = np.linalg.norm(points_filtered_cam, axis=1)
+            realistic_mask = (distance_from_camera >= self.near) & (distance_from_camera <= self.far)
+            colors_filtered = colors_initial[realistic_mask]
+        else:
+            colors_filtered = colors_initial
+            
+        return colors_filtered
+
+class PointCloudViewer:
+    """Handles point cloud visualization using Open3D"""
+    
+    def __init__(self):
+        self.vis = None
+        self.pcd = None
+        self.viewer_thread = None
+        self.data_queue = queue.Queue()
+        self.running = False
+        
+    def create_viewer(self, window_name="Point Cloud Viewer", width=800, height=600):
+        """Create Open3D visualizer window"""
+        self.vis = o3d.visualization.Visualizer()
+        self.vis.create_window(window_name, width, height)
+        return self.vis
+    
+    def update_pointcloud(self, points, colors=None):
+        """Update point cloud in the viewer"""
+        if len(points) == 0:
+            return
+            
+        # Create Open3D point cloud
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        
+        if colors is not None and len(colors) == len(points):
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+        else:
+            # Default to height-based coloring
+            colors_default = np.zeros_like(points)
+            colors_default[:, 2] = (points[:, 2] - np.min(points[:, 2])) / (np.max(points[:, 2]) - np.min(points[:, 2]))
+            pcd.colors = o3d.utility.Vector3dVector(colors_default)
+        
+        # Update or add point cloud to visualizer
+        if self.pcd is None:
+            self.vis.add_geometry(pcd)
+            self.pcd = pcd
+        else:
+            self.pcd.points = pcd.points
+            self.pcd.colors = pcd.colors
+            self.vis.update_geometry(self.pcd)
+        
+        self.vis.poll_events()
+        self.vis.update_renderer()
+    
+    def show_pointcloud_interactive(self, points, colors=None, window_name="Point Cloud Viewer"):
+        """Show point cloud in an interactive window with keyboard controls"""
+        if len(points) == 0:
+            print("No points to display")
+            return
+        
+        # Check if we're on Wayland or if Open3D is likely to fail
+        import os
+        wayland_session = os.environ.get('WAYLAND_DISPLAY') or os.environ.get('XDG_SESSION_TYPE') == 'wayland'
+        
+        if wayland_session:
+            print("Wayland detected - using matplotlib viewer for compatibility")
+            return self._show_matplotlib_streaming(points, colors, window_name)
+        
+        # Try Open3D first, fallback to matplotlib if it fails
+        try:
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points)
+            
+            if colors is not None and len(colors) == len(points):
+                pcd.colors = o3d.utility.Vector3dVector(colors)
+            
+            # Add coordinate frame for reference
+            coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+            
+            # Create visualizer with key callbacks
+            vis = o3d.visualization.VisualizerWithKeyCallback()
+            vis.create_window(window_name, width=800, height=600)
+            
+            # Store data for saving
+            self.current_points = points
+            self.current_colors = colors
+            self.save_counter = 1
+            
+            def save_callback(vis):
+                """Save point cloud when 's' is pressed"""
+                filename_ply = f"saved_pointcloud_{self.save_counter:03d}.ply"
+                filename_pcd = f"saved_pointcloud_{self.save_counter:03d}.pcd"
+                
+                PointCloudSaver.save_ply(self.current_points, self.current_colors, filename_ply)
+                PointCloudSaver.save_pcd(self.current_points, self.current_colors, filename_pcd)
+                
+                print(f"Point cloud saved as {filename_ply} and {filename_pcd}")
+                print("Press 's' to save again, 'q' to quit")
+                self.save_counter += 1
+                return False
+            
+            def quit_callback(vis):
+                """Quit viewer when 'q' is pressed"""
+                print("Exiting viewer...")
+                return True
+            
+            def help_callback(vis):
+                """Show help when 'h' is pressed"""
+                print("\n=== Point Cloud Viewer Controls ===")
+                print("s - Save point cloud (PLY and PCD formats)")
+                print("q - Quit viewer")
+                print("h - Show this help")
+                print("Mouse: Left click + drag to rotate")
+                print("Mouse: Right click + drag to zoom")
+                print("Mouse: Middle click + drag to pan")
+                print("====================================\n")
+                return False
+            
+            # Register key callbacks
+            vis.register_key_callback(ord('S'), save_callback)
+            vis.register_key_callback(ord('Q'), quit_callback)
+            vis.register_key_callback(ord('H'), help_callback)
+            
+            # Add geometries
+            vis.add_geometry(pcd)
+            vis.add_geometry(coord_frame)
+            
+            # Show initial help
+            print("\n=== Point Cloud Viewer Controls ===")
+            print("s - Save point cloud (PLY and PCD formats)")
+            print("q - Quit viewer")
+            print("h - Show help")
+            print("====================================\n")
+            
+            # Run visualizer
+            vis.run()
+            vis.destroy_window()
+            
+        except Exception as e:
+            print(f"Open3D viewer failed: {e}")
+            print("Falling back to matplotlib viewer...")
+            return self._show_matplotlib_streaming(points, colors, window_name)
+    
+    def start_threaded_viewer(self, window_name="Point Cloud Viewer"):
+        """Start the threaded matplotlib viewer"""
+        if self.viewer_thread is not None and self.viewer_thread.is_alive():
+            return  # Already running
+            
+        self.running = True
+        self.viewer_thread = threading.Thread(
+            target=self._threaded_matplotlib_viewer, 
+            args=(window_name,),
+            daemon=True
+        )
+        self.viewer_thread.start()
+        
+        # Wait a moment for viewer to initialize
+        time.sleep(0.5)
+    
+    def update_viewer(self, points, colors=None):
+        """Update the viewer with new point cloud data"""
+        if not self.running:
+            return
+        
+        # Put new data in queue (non-blocking)
+        try:
+            self.data_queue.put_nowait({'points': points, 'colors': colors})
+        except queue.Full:
+            # Skip this update if queue is full
+            pass
+    
+    def _threaded_matplotlib_viewer(self, window_name):
+        """Threaded matplotlib viewer that updates from queue"""
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend for thread safety
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        plt.ion()
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Initialize with empty plot
+        scatter = ax.scatter([], [], [], s=1, alpha=0.6)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f"{window_name}\nPress 's' to save point cloud")
+        
+        # Store for saving
+        self.current_points = None
+        self.current_colors = None
+        self.save_counter = 1
+        
+        # Set up key press handling
+        def on_key_press(event):
+            if event.key == 's' and self.current_points is not None:
+                filename_ply = f"saved_pointcloud_{self.save_counter:03d}.ply"
+                filename_pcd = f"saved_pointcloud_{self.save_counter:03d}.pcd"
+                
+                PointCloudSaver.save_ply(self.current_points, self.current_colors, filename_ply)
+                PointCloudSaver.save_pcd(self.current_points, self.current_colors, filename_pcd)
+                
+                print(f"Point cloud saved as {filename_ply} and {filename_pcd}")
+                self.save_counter += 1
+        
+        fig.canvas.mpl_connect('key_press_event', on_key_press)
+        
+        print(f"\n=== {window_name} Started ===")
+        print("Press 's' in the plot window to save point cloud")
+        print("Close window to stop viewer")
+        
+        # Main update loop
+        while self.running and plt.fignum_exists(fig.number):
+            try:
+                # Check for new data (non-blocking)
+                data = self.data_queue.get_nowait()
+                points = data['points']
+                colors = data['colors']
+                
+                # Update stored data
+                self.current_points = points
+                self.current_colors = colors
+                
+                # Clear and redraw
+                ax.clear()
+                ax.set_xlabel('X')
+                ax.set_ylabel('Y')
+                ax.set_zlabel('Z')
+                ax.set_title(f"{window_name}\nPress 's' to save point cloud")
+                
+                if len(points) > 0:
+                    if colors is not None and len(colors) == len(points):
+                        ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
+                                  c=colors, s=1, alpha=0.6)
+                    else:
+                        ax.scatter(points[:, 0], points[:, 1], points[:, 2], 
+                                  c=points[:, 2], cmap='viridis', s=1, alpha=0.6)
+                
+                plt.draw()
+                
+            except queue.Empty:
+                # No new data, just refresh
+                plt.pause(0.1)
+            except Exception as e:
+                print(f"Viewer error: {e}")
+                break
+        
+        self.running = False
+        plt.ioff()
+        plt.close('all')  # Close all matplotlib figures
+        
+    def stop_viewer(self):
+        """Stop the threaded viewer"""
+        self.running = False
+        if self.viewer_thread is not None:
+            self.viewer_thread.join(timeout=1.0)
+            
+        # Clean up matplotlib
+        import matplotlib.pyplot as plt
+        plt.close('all')
+    
+    def show_pointcloud(self, points, colors=None, window_name="Point Cloud", block=True):
+        """Show point cloud in a new window"""
+        if len(points) == 0:
+            print("No points to display")
+            return
+            
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        
+        if colors is not None and len(colors) == len(points):
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+        
+        # Add coordinate frame for reference
+        coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+        
+        if block:
+            o3d.visualization.draw_geometries([pcd, coord_frame], window_name=window_name)
+        else:
+            vis = o3d.visualization.Visualizer()
+            vis.create_window(window_name)
+            vis.add_geometry(pcd)
+            vis.add_geometry(coord_frame)
+            vis.run()
+            vis.destroy_window()
+    
+    def close(self):
+        """Close the visualizer"""
+        if self.vis is not None:
+            self.vis.destroy_window()
 
 class PointCloudSaver:
     """Handles saving point clouds to various formats"""
@@ -257,6 +577,29 @@ class PointCloudSaver:
                     r, g, b = 128, 128, 128  # Default gray color
                 f.write(f"{points[i, 0]:.6f} {points[i, 1]:.6f} {points[i, 2]:.6f} {r} {g} {b}\n")
         
+        print(f"Point cloud saved to {filename}")
+    
+    @staticmethod
+    def save_pcd(points, colors, filename):
+        """
+        Save point cloud in Open3D PCD format
+        
+        Args:
+            points: Point cloud array (N x 3)
+            colors: Color array (N x 3) with values 0-1
+            filename: Output filename
+        """
+        if len(points) == 0:
+            print(f"Warning: No points to save for {filename}")
+            return
+            
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        
+        if colors is not None and len(colors) == len(points):
+            pcd.colors = o3d.utility.Vector3dVector(colors)
+        
+        o3d.io.write_point_cloud(filename, pcd)
         print(f"Point cloud saved to {filename}")
 
 def create_robot_motion_camera(robot):
