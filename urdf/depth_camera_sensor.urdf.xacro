@@ -1,0 +1,139 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="depth_camera_sensor">
+
+  <!-- Camera properties -->
+  <xacro:property name="camera_width" value="0.04" />
+  <xacro:property name="camera_height" value="0.03" />
+  <xacro:property name="camera_depth" value="0.02" />
+  <xacro:property name="camera_mass" value="0.05" />
+
+  <!-- PicoFlexx2 VGA specifications -->
+  <xacro:property name="image_width" value="640" />
+  <xacro:property name="image_height" value="480" />
+  <xacro:property name="image_format" value="R8G8B8" />
+  <xacro:property name="clip_near" value="0.1" />
+  <xacro:property name="clip_far" value="4.0" />
+  <xacro:property name="noise_mean" value="0.0" />
+  <xacro:property name="noise_stddev" value="0.007" />
+  <xacro:property name="hfov" value="1.047" />
+  <xacro:property name="fps" value="45" />
+
+  <!-- Inertia macro for box -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertia ixx="${m*(y*y+z*z)/12}" ixy="0" ixz="0"
+             iyy="${m*(x*x+z*z)/12}" iyz="0"
+             izz="${m*(x*x+y*y)/12}" />
+  </xacro:macro>
+
+  <!-- Base link for the sensor -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 0.05 0.02"/>
+      </geometry>
+      <material name="base_material">
+        <color rgba="0.2 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 0.05 0.02"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Camera Link -->
+  <link name="camera_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${camera_mass}"/>
+      <xacro:box_inertia m="${camera_mass}" x="${camera_width}" y="${camera_height}" z="${camera_depth}"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${camera_width} ${camera_height} ${camera_depth}"/>
+      </geometry>
+      <material name="camera_material">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${camera_width} ${camera_height} ${camera_depth}"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Camera Optical Frame -->
+  <link name="camera_depth_frame"/>
+  <link name="camera_depth_optical_frame"/>
+
+  <!-- Joints -->
+  <joint name="base_to_camera" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.025 0 0.01" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="camera_to_depth_frame" type="fixed">
+    <parent link="camera_link"/>
+    <child link="camera_depth_frame"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="camera_depth_frame_to_optical" type="fixed">
+    <parent link="camera_depth_frame"/>
+    <child link="camera_depth_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+  </joint>
+
+  <!-- Gazebo reference for camera_link -->
+  <gazebo reference="camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="depth_camera" type="depth">
+      <update_rate>${fps}</update_rate>
+      <camera>
+        <horizontal_fov>${hfov}</horizontal_fov>
+        <image>
+          <width>${image_width}</width>
+          <height>${image_height}</height>
+          <format>${image_format}</format>
+        </image>
+        <clip>
+          <near>${clip_near}</near>
+          <far>${clip_far}</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>${noise_mean}</mean>
+          <stddev>${noise_stddev}</stddev>
+        </noise>
+      </camera>
+      <plugin name="depth_camera_controller" filename="libgazebo_ros_camera.so">
+        <ros>
+          <namespace></namespace>
+          <remapping>image_raw:=camera/image_raw</remapping>
+          <remapping>image_depth:=camera/depth/image_raw</remapping>
+          <remapping>camera_info:=camera/camera_info</remapping>
+          <remapping>camera_info_depth:=camera/depth/camera_info</remapping>
+          <remapping>points:=camera/points</remapping>
+        </ros>
+        <camera_name>depth_camera</camera_name>
+        <frame_name>camera_depth_optical_frame</frame_name>
+        <hack_baseline>0.07</hack_baseline>
+        <min_depth>${clip_near}</min_depth>
+        <max_depth>${clip_far}</max_depth>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+</robot>
