@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(3d_dwa_mujoco)
+project(mujoco_rgbd_ros2)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,19 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Find ROS2 dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(pcl_ros REQUIRED)
+find_package(pcl_conversions REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(image_transport REQUIRED)
+find_package(camera_info_manager REQUIRED)
+
 # Find OpenGL
 find_package(OpenGL REQUIRED)
 
@@ -16,48 +29,94 @@ find_package(OpenGL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 
-# Set MuJoCo paths
-set(MUJOCO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco)
-set(MUJOCO_LIB_PATH ${MUJOCO_ROOT}/build/lib)
-set(MUJOCO_INCLUDE_PATH ${MUJOCO_ROOT}/include)
+# MuJoCo directories - using pre-built binary
+set(MUJOCO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco-3.3.4)
+set(MUJOCO_INCLUDE_DIR ${MUJOCO_DIR}/include)
+set(MUJOCO_LIB_DIR ${MUJOCO_DIR}/lib)
 
-# Set library extension based on platform
-if(APPLE)
-    set(MUJOCO_LIB_EXT "dylib")
-elseif(UNIX)
-    set(MUJOCO_LIB_EXT "so")
-else()
-    set(MUJOCO_LIB_EXT "dll")
-endif()
+# Define MuJoCo libraries
+set(MUJOCO_LIBS
+  ${MUJOCO_LIB_DIR}/libmujoco.so.3.3.4
+  ${GLFW_LIBRARIES}
+  GL
+  GLEW
+  m
+  dl
+)
 
-# Add executable
-add_executable(mujoco_sim src/mujoco_main.cpp)
+# Find OpenCV and PCL for RGBD camera after MuJoCo
+find_package(OpenCV REQUIRED)
+find_package(PCL REQUIRED)
+
+# Add executables
+add_executable(mujoco_rgbd_node 
+    src/mujoco_rgbd_ros2_node.cpp
+    src/mujoco_rgbd_camera.cpp
+)
 
 # Link libraries
-target_link_libraries(mujoco_sim
-    ${MUJOCO_LIB_PATH}/libmujoco.${MUJOCO_LIB_EXT}
-    ${OPENGL_LIBRARIES}
-    ${GLFW_LIBRARIES}
+target_link_libraries(mujoco_rgbd_node
+  ${MUJOCO_LIBS}
+  ${OpenCV_LIBS}
+  ${PCL_LIBRARIES}
 )
 
-# Add GLFW library directory to linker path
-target_link_directories(mujoco_sim PRIVATE ${GLFW_LIBRARY_DIRS})
+# Set ROS2 dependencies for mujoco_rgbd_node
+ament_target_dependencies(mujoco_rgbd_node
+    rclcpp
+    sensor_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+    pcl_ros
+    pcl_conversions
+    cv_bridge
+    image_transport
+    camera_info_manager
+)
+
+# Add library directories to linker path
+target_link_directories(mujoco_rgbd_node PRIVATE 
+    ${GLFW_LIBRARY_DIRS}
+    ${PCL_LIBRARY_DIRS}
+)
 
 # Include directories
-target_include_directories(mujoco_sim PRIVATE
-    ${MUJOCO_INCLUDE_PATH}
-    ${OPENGL_INCLUDE_DIRS}
-    ${GLFW_INCLUDE_DIRS}
+include_directories(
+  include
+  ${MUJOCO_INCLUDE_DIR}
+  ${OpenCV_INCLUDE_DIRS}
+  ${PCL_INCLUDE_DIRS}
 )
 
-# Compiler flags for macOS
-if(APPLE)
-    target_compile_options(mujoco_sim PRIVATE -Wno-deprecated-declarations)
-    target_link_libraries(mujoco_sim "-framework OpenGL" "-framework Cocoa" "-framework IOKit")
-endif()
-
-# Set rpath for dynamic linking
-set_target_properties(mujoco_sim PROPERTIES
-    BUILD_RPATH "${MUJOCO_LIB_PATH}:${GLFW_LIBRARY_DIRS}"
-    INSTALL_RPATH "${MUJOCO_LIB_PATH}:${GLFW_LIBRARY_DIRS}"
+# Link directories
+link_directories(
+  ${MUJOCO_LIB_DIR}
+  ${PCL_LIBRARY_DIRS}
 )
+
+# Set RPATH for runtime library finding
+set_target_properties(mujoco_rgbd_node PROPERTIES
+  INSTALL_RPATH "${MUJOCO_LIB_DIR}"
+  BUILD_RPATH "${MUJOCO_LIB_DIR}"
+)
+
+# Install targets
+install(TARGETS
+    mujoco_rgbd_node
+    DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch files
+install(DIRECTORY
+    launch
+    DESTINATION share/${PROJECT_NAME}/
+)
+
+# Install config files
+install(DIRECTORY
+    config
+    DESTINATION share/${PROJECT_NAME}/
+)
+
+ament_package()

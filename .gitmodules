@@ -1,3 +1,0 @@
-[submodule "third_party/mujoco"]
-	path = third_party/mujoco
-	url = https://github.com/google-deepmind/mujoco
