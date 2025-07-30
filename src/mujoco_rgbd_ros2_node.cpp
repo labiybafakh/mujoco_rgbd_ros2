@@ -13,11 +13,12 @@
 #include <chrono>
 #include <thread>
 #include <memory>
+#include <cmath>
 
 class MuJoCoRGBDNode : public rclcpp::Node
 {
 public:
-    MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false)
+    MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false), frame_counter_(0)
     {
         // Parameters
         this->declare_parameter("model_file", "config/camera_environment.xml");
@@ -26,6 +27,9 @@ public:
         this->declare_parameter("publish_rate", 30.0);
         this->declare_parameter("image_width", 640);
         this->declare_parameter("image_height", 480);
+        this->declare_parameter("enable_circular_motion", true);
+        this->declare_parameter("circle_radius", 2.0);
+        this->declare_parameter("circle_height", 1.0);
 
         model_file_ = this->get_parameter("model_file").as_string();
         camera_name_ = this->get_parameter("camera_name").as_string();
@@ -33,6 +37,9 @@ public:
         publish_rate_ = this->get_parameter("publish_rate").as_double();
         image_width_ = this->get_parameter("image_width").as_int();
         image_height_ = this->get_parameter("image_height").as_int();
+        enable_circular_motion_ = this->get_parameter("enable_circular_motion").as_bool();
+        circle_radius_ = this->get_parameter("circle_radius").as_double();
+        circle_height_ = this->get_parameter("circle_height").as_double();
 
         // Publishers
         pointcloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("~/pointcloud", 10);
@@ -144,6 +151,23 @@ private:
 
         // Run simulation step
         mj_step(model_, data_);
+
+        // Update camera position with circular motion
+        if (enable_circular_motion_) {
+            double time = frame_counter_ / publish_rate_;  // Time in seconds
+            double x = circle_radius_ * cos(time);
+            double y = circle_radius_ * sin(time);
+            double z = circle_height_;
+            
+            if (!rgbd_camera_.updateCameraPosition(model_, data_, x, y, z)) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
+                                    "Failed to update camera position");
+            } else {
+                RCLCPP_DEBUG(this->get_logger(), "Camera position: [%.2f, %.2f, %.2f]", x, y, z);
+            }
+        }
+        
+        frame_counter_++;
 
         // Capture RGBD data
         if (!rgbd_camera_.capture(model_, data_, &context_)) {
@@ -284,6 +308,12 @@ private:
     double publish_rate_;
     int image_width_, image_height_;
     bool initialized_;
+    
+    // Camera movement parameters
+    bool enable_circular_motion_;
+    double circle_radius_;
+    double circle_height_;
+    int frame_counter_;
 
     mjModel* model_ = nullptr;
     mjData* data_ = nullptr;

@@ -1,4 +1,4 @@
-thm#pragma once
+#pragma once
 
 #include "mujoco/mujoco.h"
 #include <GLFW/glfw3.h>
@@ -25,6 +25,14 @@ public:
 
     // Initialize camera with MuJoCo model and camera ID
     bool initialize(const mjModel* model, int camera_id);
+    
+    // Update camera position (for mocap body cameras)
+    bool updateCameraPosition(const mjModel* model, mjData* data, double x, double y, double z);
+    
+    // Set camera position directly (wrapper for updateCameraPosition)
+    bool setCameraPosition(const mjModel* model, mjData* data, double x, double y, double z) {
+        return updateCameraPosition(model, data, x, y, z);
+    }
     
     // Capture RGBD data from current simulation state
     bool capture(const mjModel* model, mjData* data, const mjrContext* context);

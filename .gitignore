@@ -11,3 +11,6 @@ wheels/
 .DS_Store
 .env
 mujoco-*/
+install/
+log/
+build

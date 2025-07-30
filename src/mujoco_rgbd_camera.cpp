@@ -30,6 +30,34 @@ bool MujocoRGBDCamera::initialize(const mjModel* model, int camera_id) {
     return true;
 }
 
+bool MujocoRGBDCamera::updateCameraPosition(const mjModel* model, mjData* data, double x, double y, double z) {
+    if (!model || !data || camera_id_ < 0) {
+        std::cerr << "Error: Invalid parameters for camera position update" << std::endl;
+        return false;
+    }
+    
+    // Find the camera body by name (assuming camera is attached to a body named "camera")
+    int camera_body_id = mj_name2id(model, mjOBJ_BODY, "camera");
+    if (camera_body_id < 0) {
+        std::cerr << "Error: Camera body not found" << std::endl;
+        return false;
+    }
+    
+    // Check if this body has mocap
+    int mocap_id = model->body_mocapid[camera_body_id];
+    if (mocap_id < 0 || mocap_id >= model->nmocap) {
+        std::cerr << "Error: Camera body is not a mocap body" << std::endl;
+        return false;
+    }
+    
+    // Update mocap position
+    data->mocap_pos[mocap_id * 3 + 0] = x;
+    data->mocap_pos[mocap_id * 3 + 1] = y;
+    data->mocap_pos[mocap_id * 3 + 2] = z;
+    
+    return true;
+}
+
 bool MujocoRGBDCamera::capture(const mjModel* model, mjData* data, const mjrContext* context) {
     if (!model || !data || !context || camera_id_ < 0) {
         std::cerr << "Error: Invalid parameters for capture" << std::endl;
