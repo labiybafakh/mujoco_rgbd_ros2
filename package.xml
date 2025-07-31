@@ -23,15 +23,11 @@
 
   <!-- System dependencies -->
   <build_depend>libopencv-dev</build_depend>
-  <build_depend>libpcl-dev</build_depend>
   <build_depend>libglfw3-dev</build_depend>
-  <build_depend>libgl1-mesa-dev</build_depend>
   <build_depend>libglew-dev</build_depend>
 
   <exec_depend>libopencv-dev</exec_depend>
-  <exec_depend>libpcl-dev</exec_depend>
   <exec_depend>libglfw3-dev</exec_depend>
-  <exec_depend>libgl1-mesa-dev</exec_depend>
   <exec_depend>libglew-dev</exec_depend>
 
   <!-- Launch and visualization -->
