@@ -51,6 +51,7 @@ find_package(PCL REQUIRED)
 # Add executables
 add_executable(mujoco_rgbd_node 
     src/mujoco_rgbd_ros2_node.cpp
+    src/mujoco_rgbd_ros2_node_impl.cpp
     src/mujoco_rgbd_camera.cpp
 )
 
