@@ -5,8 +5,10 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
@@ -37,6 +39,10 @@ private:
     void publish_base_transform(const rclcpp::Time& timestamp);
     void publish_camera_transform(const rclcpp::Time& timestamp);
 
+    // Base link control
+    void pose_command_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    bool updateBaseLinkPose(double x, double y, double z, double roll, double pitch, double yaw);
+
     // Data publishing
     void publish_pointcloud(const rclcpp::Time& timestamp);
     void publish_images(const rclcpp::Time& timestamp);
@@ -55,12 +61,11 @@ private:
     int image_width_, image_height_;
     bool initialized_;
     
-    // Camera movement parameters
-    bool enable_circular_motion_;
-    double circle_radius_;
-    double circle_height_;
+    // Base link pose storage
     double base_frame_z_offset_;
     int frame_counter_;
+    double base_x_, base_y_, base_z_;
+    double base_roll_, base_pitch_, base_yaw_;
     
     // Visualizer parameters
     bool enable_visualizer_;
@@ -70,6 +75,11 @@ private:
     std::atomic<bool> visualizer_running_{false};
     std::thread visualizer_thread_;
     std::mutex data_mutex_;
+    
+    // Visualizer camera (public for mouse callback access)
+public:
+    mjvCamera vis_camera_;
+private:
 
     // MuJoCo objects
     mjModel* model_ = nullptr;
@@ -90,4 +100,7 @@ private:
     
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr timer_;
+    
+    // ROS subscribers
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
 };

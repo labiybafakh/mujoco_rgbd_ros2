@@ -1,6 +1,7 @@
 #include "mujoco_rgbd_ros2/mujoco_rgbd_ros2_node.hpp"
 
-MuJoCoRGBDNode::MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false), frame_counter_(0)
+MuJoCoRGBDNode::MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false), frame_counter_(0),
+    base_x_(0.0), base_y_(0.0), base_z_(1.0), base_roll_(0.0), base_pitch_(0.0), base_yaw_(0.0)
 {
     // Parameters
     this->declare_parameter("model_file", "config/camera_environment.xml");
@@ -9,9 +10,6 @@ MuJoCoRGBDNode::MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false)
     this->declare_parameter("publish_rate", 30.0);
     this->declare_parameter("image_width", 640);
     this->declare_parameter("image_height", 480);
-    this->declare_parameter("enable_circular_motion", true);
-    this->declare_parameter("circle_radius", 2.0);
-    this->declare_parameter("circle_height", 1.0);
     this->declare_parameter("base_frame_z_offset", 0.0);
     this->declare_parameter("enable_visualizer", true);
     this->declare_parameter("visualizer_width", 1200);
@@ -23,9 +21,6 @@ MuJoCoRGBDNode::MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false)
     publish_rate_ = this->get_parameter("publish_rate").as_double();
     image_width_ = this->get_parameter("image_width").as_int();
     image_height_ = this->get_parameter("image_height").as_int();
-    enable_circular_motion_ = this->get_parameter("enable_circular_motion").as_bool();
-    circle_radius_ = this->get_parameter("circle_radius").as_double();
-    circle_height_ = this->get_parameter("circle_height").as_double();
     base_frame_z_offset_ = this->get_parameter("base_frame_z_offset").as_double();
     enable_visualizer_ = this->get_parameter("enable_visualizer").as_bool();
     visualizer_width_ = this->get_parameter("visualizer_width").as_int();
@@ -39,6 +34,11 @@ MuJoCoRGBDNode::MuJoCoRGBDNode() : Node("mujoco_rgbd_node"), initialized_(false)
 
     // Transform broadcaster
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
+    // Pose command subscriber
+    pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+        "~/base_link/pose_command", 10,
+        std::bind(&MuJoCoRGBDNode::pose_command_callback, this, std::placeholders::_1));
 
     // Initialize MuJoCo
     initialize_mujoco();
@@ -150,20 +150,7 @@ void MuJoCoRGBDNode::publish_sensor_data()
         mj_step(model_, data_);
     }
 
-    // Update camera position with circular motion
-    if (enable_circular_motion_) {
-        double time = frame_counter_ / publish_rate_;  // Time in seconds
-        double x = circle_radius_ * cos(time);
-        double y = circle_radius_ * sin(time);
-        double z = circle_height_;
-        
-        if (!rgbd_camera_.updateCameraPosition(model_, data_, x, y, z)) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
-                                "Failed to update camera position");
-        } else {
-            RCLCPP_DEBUG(this->get_logger(), "Camera position: [%.2f, %.2f, %.2f]", x, y, z);
-        }
-    }
+    // Base_link pose will be updated via subscription to pose commands
     
     frame_counter_++;
 
@@ -202,22 +189,18 @@ void MuJoCoRGBDNode::publish_base_transform(const rclcpp::Time& timestamp)
     int camera_id = mj_name2id(model_, mjOBJ_CAMERA, camera_name_.c_str());
     int camera_body_id = model_->cam_bodyid[camera_id];
     
-    if (camera_body_id >= 0) {
-        // Base position: same X,Y as camera, but with Z offset for floor alignment
-        base_transform.transform.translation.x = data_->xpos[3 * camera_body_id + 0];
-        base_transform.transform.translation.y = data_->xpos[3 * camera_body_id + 1];
-        base_transform.transform.translation.z = data_->xpos[3 * camera_body_id + 2] + base_frame_z_offset_;
-    } else {
-        base_transform.transform.translation.x = 0.0;
-        base_transform.transform.translation.y = 0.0;
-        base_transform.transform.translation.z = base_frame_z_offset_;
-    }
+    // Use stored base_link pose
+    base_transform.transform.translation.x = base_x_;
+    base_transform.transform.translation.y = base_y_;
+    base_transform.transform.translation.z = base_z_;
 
-    // Base orientation: same as world (no rotation)
-    base_transform.transform.rotation.w = 1.0;
-    base_transform.transform.rotation.x = 0.0;
-    base_transform.transform.rotation.y = 0.0;
-    base_transform.transform.rotation.z = 0.0;
+    // Convert Euler angles to quaternion (ZYX order)
+    tf2::Quaternion q;
+    q.setRPY(base_roll_, base_pitch_, base_yaw_);
+    base_transform.transform.rotation.w = q.w();
+    base_transform.transform.rotation.x = q.x();
+    base_transform.transform.rotation.y = q.y();
+    base_transform.transform.rotation.z = q.z();
 
     tf_broadcaster_->sendTransform(base_transform);
 }
@@ -375,6 +358,44 @@ void MuJoCoRGBDNode::visualizer_loop()
 
     glfwMakeContextCurrent(vis_window);
     glfwSwapInterval(1); // Enable vsync
+    
+    // Enable mouse interaction
+    glfwSetWindowUserPointer(vis_window, this);
+    glfwSetCursorPosCallback(vis_window, [](GLFWwindow* window, double x, double y) {
+        static double lastx = x, lasty = y;
+        static bool button_left = false, button_right = false;
+        
+        int state_left = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT);
+        int state_right = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT);
+        
+        button_left = (state_left == GLFW_PRESS);
+        button_right = (state_right == GLFW_PRESS);
+        
+        if (button_left || button_right) {
+            MuJoCoRGBDNode* node = static_cast<MuJoCoRGBDNode*>(glfwGetWindowUserPointer(window));
+            mjvCamera* cam = &node->vis_camera_;
+            
+            double dx = x - lastx;
+            double dy = y - lasty;
+            
+            if (button_right) {
+                // Right drag: rotate
+                cam->azimuth += dx * 0.5;
+                cam->elevation -= dy * 0.5;
+                // Clamp elevation
+                if (cam->elevation < -90) cam->elevation = -90;
+                if (cam->elevation > 90) cam->elevation = 90;
+            } else if (button_left) {
+                // Left drag: zoom
+                cam->distance *= (1.0 + 0.01 * dy);
+                if (cam->distance < 0.1) cam->distance = 0.1;
+                if (cam->distance > 100) cam->distance = 100;
+            }
+        }
+        
+        lastx = x;
+        lasty = y;
+    });
 
     // Initialize visualizer-specific rendering context
     mjrContext vis_context;
@@ -382,14 +403,13 @@ void MuJoCoRGBDNode::visualizer_loop()
     mjr_makeContext(model_, &vis_context, mjFONTSCALE_150);
 
     // Initialize camera for visualization
-    mjvCamera vis_camera;
-    mjv_defaultCamera(&vis_camera);
-    vis_camera.lookat[0] = 0.0;
-    vis_camera.lookat[1] = 0.0;
-    vis_camera.lookat[2] = 0.0;
-    vis_camera.distance = 5.0;
-    vis_camera.azimuth = 90.0;
-    vis_camera.elevation = -20.0;
+    mjv_defaultCamera(&vis_camera_);
+    vis_camera_.lookat[0] = 0.0;
+    vis_camera_.lookat[1] = 0.0;
+    vis_camera_.lookat[2] = 1.0;
+    vis_camera_.distance = 5.0;
+    vis_camera_.azimuth = 90.0;
+    vis_camera_.elevation = -20.0;
 
     RCLCPP_INFO(this->get_logger(), "Visualizer window created and initialized");
 
@@ -403,26 +423,17 @@ void MuJoCoRGBDNode::visualizer_loop()
             mjvScene vis_scene;
             mjv_defaultScene(&vis_scene);
             mjv_makeScene(model_, &vis_scene, 1000);
-            mjv_updateScene(model_, data_, &option_, NULL, &vis_camera, mjCAT_ALL, &vis_scene);
+            mjv_updateScene(model_, data_, &option_, NULL, &vis_camera_, mjCAT_ALL, &vis_scene);
 
             // Render
             mjrRect viewport = {0, 0, visualizer_width_, visualizer_height_};
             mjr_render(viewport, &vis_scene, &vis_context);
 
-            // Show camera position and info
+            // Show base_link position and info
             char info_text[256];
-            int camera_id = mj_name2id(model_, mjOBJ_CAMERA, camera_name_.c_str());
-            if (camera_id >= 0) {
-                int camera_body_id = model_->cam_bodyid[camera_id];
-                snprintf(info_text, sizeof(info_text), 
-                        "Frame: %d\nCamera Position: [%.2f, %.2f, %.2f]", 
-                        frame_counter_, 
-                        data_->xpos[3 * camera_body_id + 0],
-                        data_->xpos[3 * camera_body_id + 1], 
-                        data_->xpos[3 * camera_body_id + 2]);
-            } else {
-                snprintf(info_text, sizeof(info_text), "Frame: %d", frame_counter_);
-            }
+            snprintf(info_text, sizeof(info_text), 
+                    "Frame: %d\nBase_link Pose: [%.2f, %.2f, %.2f]\nRPY: [%.2f, %.2f, %.2f]", 
+                    frame_counter_, base_x_, base_y_, base_z_, base_roll_, base_pitch_, base_yaw_);
             mjr_overlay(mjFONT_NORMAL, mjGRID_TOPLEFT, viewport, info_text, NULL, &vis_context);
 
             mjv_freeScene(&vis_scene);
@@ -436,4 +447,72 @@ void MuJoCoRGBDNode::visualizer_loop()
     mjr_freeContext(&vis_context);
     glfwDestroyWindow(vis_window);
     RCLCPP_INFO(this->get_logger(), "Visualizer loop ended");
+}
+
+void MuJoCoRGBDNode::pose_command_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+{
+    // Extract position
+    base_x_ = msg->pose.position.x;
+    base_y_ = msg->pose.position.y;
+    base_z_ = msg->pose.position.z;
+    
+    // Convert quaternion to Euler angles
+    tf2::Quaternion q(
+        msg->pose.orientation.x,
+        msg->pose.orientation.y,
+        msg->pose.orientation.z,
+        msg->pose.orientation.w
+    );
+    tf2::Matrix3x3 m(q);
+    m.getRPY(base_roll_, base_pitch_, base_yaw_);
+    
+    // Update base_link mocap body if it exists
+    updateBaseLinkPose(base_x_, base_y_, base_z_, base_roll_, base_pitch_, base_yaw_);
+    
+    RCLCPP_DEBUG(this->get_logger(), "Updated base_link pose: [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
+                base_x_, base_y_, base_z_, base_roll_, base_pitch_, base_yaw_);
+}
+
+bool MuJoCoRGBDNode::updateBaseLinkPose(double x, double y, double z, double roll, double pitch, double yaw)
+{
+    if (!model_ || !data_) {
+        return false;
+    }
+    
+    // Find base_link body
+    int base_body_id = mj_name2id(model_, mjOBJ_BODY, "base_link");
+    if (base_body_id < 0) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
+                           "base_link body not found in model");
+        return false;
+    }
+    
+    // Check if this body has mocap
+    int mocap_id = model_->body_mocapid[base_body_id];
+    if (mocap_id < 0 || mocap_id >= model_->nmocap) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
+                           "base_link body is not a mocap body");
+        return false;
+    }
+    
+    // Update mocap position
+    data_->mocap_pos[mocap_id * 3 + 0] = x;
+    data_->mocap_pos[mocap_id * 3 + 1] = y;
+    data_->mocap_pos[mocap_id * 3 + 2] = z;
+    
+    // Convert Euler angles to quaternion (ZYX order)
+    double cy = cos(yaw * 0.5);
+    double sy = sin(yaw * 0.5);
+    double cp = cos(pitch * 0.5);
+    double sp = sin(pitch * 0.5);
+    double cr = cos(roll * 0.5);
+    double sr = sin(roll * 0.5);
+    
+    // Set quaternion (MuJoCo format: w,x,y,z)
+    data_->mocap_quat[mocap_id * 4 + 0] = cr*cp*cy + sr*sp*sy; // w
+    data_->mocap_quat[mocap_id * 4 + 1] = sr*cp*cy - cr*sp*sy; // x
+    data_->mocap_quat[mocap_id * 4 + 2] = cr*sp*cy + sr*cp*sy; // y
+    data_->mocap_quat[mocap_id * 4 + 3] = cr*cp*sy - sr*sp*cy; // z
+    
+    return true;
 }
