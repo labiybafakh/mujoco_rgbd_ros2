@@ -11,6 +11,13 @@ endif()
 
 # Find ROS2 dependencies
 find_package(ament_cmake REQUIRED)
+
+# Check ROS distribution and set compile definition
+if(DEFINED ENV{ROS_DISTRO})
+    if($ENV{ROS_DISTRO} STREQUAL "humble")
+        add_compile_definitions(ROS_DISTRO_HUMBLE)
+    endif()
+endif()
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
