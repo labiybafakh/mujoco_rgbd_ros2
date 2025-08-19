@@ -187,7 +187,16 @@ void MujocoRGBDCamera::setupCameraIntrinsics(const mjModel* model, const mjrRect
     // Calculate intrinsics based on camera FOV
     double fovy = model->cam_fovy[camera_id_] * M_PI / 180.0;  // Convert to radians
     
-    intrinsics_.fx = intrinsics_.fy = viewport.height / (2.0 * tan(fovy / 2.0));
+    // Calculate focal length for Y direction from vertical FOV
+    intrinsics_.fy = viewport.height / (2.0 * tan(fovy / 2.0));
+    
+    // Calculate aspect ratio and horizontal FOV
+    double aspect = (double)viewport.width / viewport.height;
+    double fovx = 2.0 * atan(tan(fovy / 2.0) * aspect);
+    
+    // Calculate focal length for X direction from horizontal FOV
+    intrinsics_.fx = viewport.width / (2.0 * tan(fovx / 2.0));
+    
     intrinsics_.cx = viewport.width / 2.0;
     intrinsics_.cy = viewport.height / 2.0;
     intrinsics_.width = viewport.width;
@@ -203,8 +212,8 @@ cv::Mat MujocoRGBDCamera::linearizeDepth(const cv::Mat& raw_depth) const {
         
         for (int j = 0; j < raw_depth.cols; j++) {
             if (raw_ptr[j] < 1.0f) {  // Valid depth range
-                depth_ptr[j] = depth_params_.z_near * depth_params_.z_far * depth_params_.extent / 
-                              (depth_params_.z_far - raw_ptr[j] * (depth_params_.z_far - depth_params_.z_near));
+                depth_ptr[j] = (2.0 * depth_params_.z_near * depth_params_.z_far) / 
+                              (depth_params_.z_far + depth_params_.z_near - raw_ptr[j] * (depth_params_.z_far - depth_params_.z_near));
             } else {
                 depth_ptr[j] = 0.0f;  // Invalid depth
             }
