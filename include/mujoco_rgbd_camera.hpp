@@ -3,8 +3,8 @@
 #include "mujoco/mujoco.h"
 #include <GLFW/glfw3.h>
 #include <opencv2/opencv.hpp>
-#include <pcl/point_types.h>
-#include <pcl/point_cloud.h>
+// #include <pcl/point_types.h>
+// #include <pcl/point_cloud.h>
 #include <memory>
 
 struct CameraIntrinsics {
@@ -41,9 +41,9 @@ public:
     const cv::Mat& getColorImage() const { return color_image_; }
     const cv::Mat& getDepthImage() const { return depth_image_; }
     
-    // Generate point clouds
-    pcl::PointCloud<pcl::PointXYZ>::Ptr generatePointCloud() const;
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr generateColorPointCloud() const;
+    // Generate point clouds (temporarily disabled)
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr generatePointCloud() const;
+    // pcl::PointCloud<pcl::PointXYZRGB>::Ptr generateColorPointCloud() const;
     
     // Get camera parameters
     const CameraIntrinsics& getIntrinsics() const { return intrinsics_; }

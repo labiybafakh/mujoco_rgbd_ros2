@@ -124,6 +124,8 @@ void MujocoRGBDCamera::updateViewport(int width, int height) {
     }
 }
 
+/*
+// Temporarily commented out due to PCL dependency issues
 pcl::PointCloud<pcl::PointXYZ>::Ptr MujocoRGBDCamera::generatePointCloud() const {
     auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
     
@@ -182,6 +184,7 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr MujocoRGBDCamera::generateColorPointCloud
     
     return cloud;
 }
+*/
 
 void MujocoRGBDCamera::setupCameraIntrinsics(const mjModel* model, const mjrRect& viewport) {
     // Calculate intrinsics based on camera FOV

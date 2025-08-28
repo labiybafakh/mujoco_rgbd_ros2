@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(mujoco_rgbd_ros2)
+project(mujoco_rgbd_zenoh)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,26 +8,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-
-# Find ROS2 dependencies
-find_package(ament_cmake REQUIRED)
-
-# Check ROS distribution and set compile definition
-if(DEFINED ENV{ROS_DISTRO})
-    if($ENV{ROS_DISTRO} STREQUAL "humble")
-        add_compile_definitions(ROS_DISTRO_HUMBLE)
-    endif()
-endif()
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(pcl_ros REQUIRED)
-find_package(pcl_conversions REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
-find_package(camera_info_manager REQUIRED)
 
 # Find OpenGL
 find_package(OpenGL REQUIRED)
@@ -38,55 +18,58 @@ pkg_check_modules(GLFW REQUIRED glfw3)
 
 # MuJoCo directories - using pre-built binary
 set(MUJOCO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco-3.3.5)
-set(MUJOCO_INCLUDE_DIR ${MUJOCO_DIR}/include)
-set(MUJOCO_LIB_DIR ${MUJOCO_DIR}/lib)
 
-# Define MuJoCo libraries
-set(MUJOCO_LIBS
-  ${MUJOCO_LIB_DIR}/libmujoco.so.3.3.5
-  ${GLFW_LIBRARIES}
-  GL
-  GLEW
-  m
-  dl
-)
+# Platform-specific MuJoCo setup
+if(APPLE)
+    set(MUJOCO_FRAMEWORK_DIR ${MUJOCO_DIR}/mujoco.framework)
+    set(MUJOCO_INCLUDE_DIR ${MUJOCO_FRAMEWORK_DIR}/Headers)
+    set(MUJOCO_LIB_DIR ${MUJOCO_FRAMEWORK_DIR}/Versions/A)
+    
+    # Define MuJoCo libraries for macOS
+    set(MUJOCO_LIBS
+      ${MUJOCO_LIB_DIR}/libmujoco.3.3.5.dylib
+      ${GLFW_LIBRARIES}
+      "-framework OpenGL"
+      "-framework Cocoa" 
+      "-framework IOKit"
+      "-framework CoreVideo"
+    )
+else()
+    set(MUJOCO_INCLUDE_DIR ${MUJOCO_DIR}/include)
+    set(MUJOCO_LIB_DIR ${MUJOCO_DIR}/lib)
+    
+    # Define MuJoCo libraries for Linux
+    set(MUJOCO_LIBS
+      ${MUJOCO_LIB_DIR}/libmujoco.so.3.3.5
+      ${GLFW_LIBRARIES}
+      GL
+      GLEW
+      m
+      dl
+    )
+endif()
 
-# Find OpenCV and PCL for RGBD camera after MuJoCo
+# Find OpenCV for RGBD camera after MuJoCo
 find_package(OpenCV REQUIRED)
-find_package(PCL REQUIRED)
+# find_package(PCL REQUIRED)  # Temporarily commented out due to VTK issue
 
 # Add executables
-add_executable(mujoco_rgbd_node 
-    src/mujoco_rgbd_ros2_node.cpp
-    src/mujoco_rgbd_ros2_node_impl.cpp
+add_executable(mujoco_rgbd_main 
+    src/main.cpp
     src/mujoco_rgbd_camera.cpp
 )
 
 # Link libraries
-target_link_libraries(mujoco_rgbd_node
+target_link_libraries(mujoco_rgbd_main
   ${MUJOCO_LIBS}
   ${OpenCV_LIBS}
-  ${PCL_LIBRARIES}
-)
-
-# Set ROS2 dependencies for mujoco_rgbd_node
-ament_target_dependencies(mujoco_rgbd_node
-    rclcpp
-    sensor_msgs
-    geometry_msgs
-    tf2
-    tf2_ros
-    pcl_ros
-    pcl_conversions
-    cv_bridge
-    image_transport
-    camera_info_manager
+  # ${PCL_LIBRARIES}  # Temporarily commented out due to VTK issue
 )
 
 # Add library directories to linker path
-target_link_directories(mujoco_rgbd_node PRIVATE 
+target_link_directories(mujoco_rgbd_main PRIVATE 
     ${GLFW_LIBRARY_DIRS}
-    ${PCL_LIBRARY_DIRS}
+    # ${PCL_LIBRARY_DIRS}  # Temporarily commented out due to VTK issue
 )
 
 # Include directories
@@ -94,31 +77,25 @@ include_directories(
   include
   ${MUJOCO_INCLUDE_DIR}
   ${OpenCV_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
+  # ${PCL_INCLUDE_DIRS}  # Temporarily commented out due to VTK issue
 )
 
 # Link directories
 link_directories(
   ${MUJOCO_LIB_DIR}
-  ${PCL_LIBRARY_DIRS}
+  # ${PCL_LIBRARY_DIRS}  # Temporarily commented out due to VTK issue
 )
 
 # Set RPATH for runtime library finding
-set_target_properties(mujoco_rgbd_node PROPERTIES
+set_target_properties(mujoco_rgbd_main PROPERTIES
   INSTALL_RPATH "${MUJOCO_LIB_DIR}"
   BUILD_RPATH "${MUJOCO_LIB_DIR}"
 )
 
 # Install targets
 install(TARGETS
-    mujoco_rgbd_node
-    DESTINATION lib/${PROJECT_NAME}
-)
-
-# Install launch files
-install(DIRECTORY
-    launch
-    DESTINATION share/${PROJECT_NAME}/
+    mujoco_rgbd_main
+    DESTINATION bin
 )
 
 # Install config files
@@ -126,5 +103,3 @@ install(DIRECTORY
     config
     DESTINATION share/${PROJECT_NAME}/
 )
-
-ament_package()

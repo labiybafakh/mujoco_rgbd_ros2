@@ -67,10 +67,6 @@
       <geom type="cylinder" size="0.5 2.0" rgba="1.0 1.0 0.1 1"/>
     </body>
 
-    <body name="pole-5" pos="0.0 2.0 0.5">
-      <geom type="cylinder" size="0.5 2.0" rgba="1.0 1.0 0.1 1"/>
-    </body>
-
   </worldbody>
 
 </mujoco>
