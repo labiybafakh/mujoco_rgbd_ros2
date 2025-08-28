@@ -37,13 +37,13 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 
 # MuJoCo directories - using pre-built binary
-set(MUJOCO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco-3.3.4)
+set(MUJOCO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mujoco-3.3.5)
 set(MUJOCO_INCLUDE_DIR ${MUJOCO_DIR}/include)
 set(MUJOCO_LIB_DIR ${MUJOCO_DIR}/lib)
 
 # Define MuJoCo libraries
 set(MUJOCO_LIBS
-  ${MUJOCO_LIB_DIR}/libmujoco.so.3.3.4
+  ${MUJOCO_LIB_DIR}/libmujoco.so.3.3.5
   ${GLFW_LIBRARIES}
   GL
   GLEW

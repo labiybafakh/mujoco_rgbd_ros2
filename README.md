@@ -93,5 +93,5 @@ ros2 launch mujoco_rgbd_ros2 mujoco_rgbd.launch.py image_width:=1280 image_heigh
 ## Troubleshooting
 
 - **Build fails**: Make sure all dependencies are installed using the commands in the Prerequisites section
-- **MuJoCo library not found**: The pre-built MuJoCo library is included in `third_party/mujoco-3.3.4/lib/`
+- **MuJoCo library not found**: The pre-built MuJoCo library is included in `third_party/mujoco-3.3.5/lib/`
 - **GLFW or OpenGL errors**: Ensure you have the graphics drivers and development libraries installed
