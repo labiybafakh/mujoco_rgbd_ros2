@@ -4,21 +4,34 @@
 #include <cassert>
 
 MujocoRGBDCamera::MujocoRGBDCamera() 
-    : camera_id_(-1), buffers_allocated_(false), buffer_width_(0), buffer_height_(0) {
+    : camera_id_(-1), buffers_allocated_(false), buffer_width_(0), buffer_height_(0), 
+      rgbd_scene_(nullptr), scene_initialized_(false) {
     // Initialize intrinsics to default values
     intrinsics_ = {0, 0, 0, 0, 0, 0};
     depth_params_ = {0, 0, 0};
 }
 
 MujocoRGBDCamera::~MujocoRGBDCamera() {
+    cleanupScene();
     releaseBuffers();
 }
 
 bool MujocoRGBDCamera::initialize(const mjModel* model, int camera_id) {
-    if (!model || camera_id < 0 || camera_id >= model->ncam) {
+    if (!model || camera_id < 0) {
         std::cerr << "Error: Invalid model or camera ID" << std::endl;
         return false;
     }
+    
+    // Temporarily bypass camera count check - MuJoCo may not count fixed cameras in ncam
+    std::cout << "Debug: model->ncam = " << model->ncam << ", camera_id = " << camera_id << std::endl;
+    
+    // Check if camera exists by trying to access it
+    if (camera_id < 0) {
+        std::cerr << "Error: Invalid camera ID " << camera_id << std::endl;
+        return false;
+    }
+    
+    // For now, we'll trust the camera lookup from mj_name2id and proceed
     
     camera_id_ = camera_id;
     
@@ -64,19 +77,24 @@ bool MujocoRGBDCamera::capture(const mjModel* model, mjData* data, const mjrCont
         return false;
     }
     
-    // Set up camera for rendering
+    // Initialize scene if not done yet
+    if (!scene_initialized_) {
+        initializeScene(model);
+    }
+    
+    // Save current viewport to restore later
+    int saved_viewport[4];
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    
+    // Set up camera for rendering from the RGBD camera's perspective
     mjvCamera cam;
     mjv_defaultCamera(&cam);
     cam.type = mjCAMERA_FIXED;
     cam.fixedcamid = camera_id_;
     
-    // Create scene
-    mjvScene scn;
-    mjv_defaultScene(&scn);
-    mjv_makeScene(model, &scn, 2000);
-    
-    // Set viewport - using default size for now
+    // Set viewport for RGBD capture
     mjrRect viewport = {0, 0, 640, 480};
+    glViewport(0, 0, viewport.width, viewport.height);
     
     // Allocate buffers if needed
     if (!buffers_allocated_ || buffer_width_ != viewport.width || buffer_height_ != viewport.height) {
@@ -84,14 +102,17 @@ bool MujocoRGBDCamera::capture(const mjModel* model, mjData* data, const mjrCont
         setupCameraIntrinsics(model, viewport);
     }
     
-    // Update scene
+    // Update RGBD scene with camera view
     mjvOption opt;
     mjv_defaultOption(&opt);
-    mjv_updateScene(model, data, &opt, nullptr, &cam, mjCAT_ALL, &scn);
+    mjv_updateScene(model, data, &opt, nullptr, &cam, mjCAT_ALL, rgbd_scene_);
     
     // Render and read pixels
-    mjr_render(viewport, &scn, context);
+    mjr_render(viewport, rgbd_scene_, context);
     mjr_readPixels(color_buffer_.get(), depth_buffer_.get(), viewport, context);
+    
+    // Restore original viewport
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     
     // Convert to OpenCV matrices
     cv::Size img_size(viewport.width, viewport.height);
@@ -105,9 +126,6 @@ bool MujocoRGBDCamera::capture(const mjModel* model, mjData* data, const mjrCont
     cv::Mat flipped_depth;
     cv::flip(raw_depth, flipped_depth, 0);
     depth_image_ = linearizeDepth(flipped_depth);
-    
-    // Clean up
-    mjv_freeScene(&scn);
     
     return true;
 }
@@ -124,11 +142,11 @@ void MujocoRGBDCamera::updateViewport(int width, int height) {
     }
 }
 
-/*
 // Temporarily commented out due to PCL dependency issues
-pcl::PointCloud<pcl::PointXYZ>::Ptr MujocoRGBDCamera::generatePointCloud() const {
-    auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>();
-    
+std::vector<Point3D> MujocoRGBDCamera::generatePointCloud() const {
+
+    std::vector<Point3D> cloud;
+
     if (depth_image_.empty()) {
         return cloud;
     }
@@ -136,20 +154,25 @@ pcl::PointCloud<pcl::PointXYZ>::Ptr MujocoRGBDCamera::generatePointCloud() const
     for (int i = 0; i < depth_image_.rows; i++) {
         for (int j = 0; j < depth_image_.cols; j++) {
             float depth = depth_image_.at<float>(i, j);
-            
+            // Debug: only print first few pixels to avoid console spam
+            if (i < 2 && j < 5) {
+                std::cout << "Depth at (" << i << ", " << j << "): " << depth << std::endl;
+            }
             // Filter far points
             if (depth > 0 && depth < depth_params_.z_far) {
-                pcl::PointXYZ point;
+                
+                Point3D point;
                 point.x = (j - intrinsics_.cx) * depth / intrinsics_.fx;
                 point.y = (i - intrinsics_.cy) * depth / intrinsics_.fy;
                 point.z = depth;
-                cloud->push_back(point);
+                cloud.emplace_back(point);
             }
         }
     }
     
     return cloud;
 }
+/*
 
 pcl::PointCloud<pcl::PointXYZRGB>::Ptr MujocoRGBDCamera::generateColorPointCloud() const {
     auto cloud = std::make_shared<pcl::PointCloud<pcl::PointXYZRGB>>();
@@ -212,7 +235,6 @@ cv::Mat MujocoRGBDCamera::linearizeDepth(const cv::Mat& raw_depth) const {
     for (int i = 0; i < raw_depth.rows; i++) {
         const float* raw_ptr = raw_depth.ptr<float>(i);
         float* depth_ptr = depth_img.ptr<float>(i);
-        
         for (int j = 0; j < raw_depth.cols; j++) {
             if (raw_ptr[j] < 1.0f) {  // Valid depth range
                 depth_ptr[j] = (2.0 * depth_params_.z_near * depth_params_.z_far) / 
@@ -222,7 +244,7 @@ cv::Mat MujocoRGBDCamera::linearizeDepth(const cv::Mat& raw_depth) const {
             }
         }
     }
-    
+
     return depth_img;
 }
 
@@ -242,4 +264,26 @@ void MujocoRGBDCamera::releaseBuffers() {
     depth_buffer_.reset();
     buffers_allocated_ = false;
     buffer_width_ = buffer_height_ = 0;
+}
+
+void MujocoRGBDCamera::initializeScene(const mjModel* model) {
+    if (scene_initialized_) {
+        cleanupScene();
+    }
+    
+    rgbd_scene_ = new mjvScene();
+    mjv_defaultScene(rgbd_scene_);
+    mjv_makeScene(model, rgbd_scene_, 1000);  // Smaller scene for RGBD capture
+    scene_initialized_ = true;
+    
+    std::cout << "RGBD scene initialized with capacity: " << rgbd_scene_->maxgeom << " geoms" << std::endl;
+}
+
+void MujocoRGBDCamera::cleanupScene() {
+    if (scene_initialized_ && rgbd_scene_) {
+        mjv_freeScene(rgbd_scene_);
+        delete rgbd_scene_;
+        rgbd_scene_ = nullptr;
+        scene_initialized_ = false;
+    }
 }

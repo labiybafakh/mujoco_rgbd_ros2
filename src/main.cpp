@@ -2,6 +2,8 @@
 #include "mujoco/mujoco.h"
 #include <GLFW/glfw3.h>
 #include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+#include <opencv2/opencv.hpp>
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -28,7 +30,7 @@ int main(int argc, char** argv) {
     std::cout << "Signal handlers set up" << std::endl;
     std::cout.flush();
 
-    std::string model_file = "../config/camera_environment.xml";
+    std::string model_file = "config/camera_environment.xml";
     std::string camera_name = "camera";
     
     if (argc > 1) {
@@ -70,42 +72,58 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Create visible context for rendering (use default OpenGL settings)
+    // Create main simulation window
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    GLFWwindow* window = glfwCreateWindow(1024, 768, "MuJoCo Simulation - ESC to quit", nullptr, nullptr);
-    if (!window) {
-        std::cerr << "Failed to create GLFW window" << std::endl;
+    GLFWwindow* main_window = glfwCreateWindow(1024, 768, "MuJoCo Simulation - ESC to quit", nullptr, nullptr);
+    if (!main_window) {
+        std::cerr << "Failed to create main GLFW window" << std::endl;
         glfwTerminate();
         mj_deleteData(data);
         mj_deleteModel(model);
         return -1;
     }
 
-    glfwMakeContextCurrent(window);
+    // Create RGBD debug window (shared context with main window)
+    GLFWwindow* rgbd_window = glfwCreateWindow(800, 400, "RGBD Camera - RGB | Depth", nullptr, main_window);
+    if (!rgbd_window) {
+        std::cerr << "Failed to create RGBD GLFW window" << std::endl;
+        glfwDestroyWindow(main_window);
+        glfwTerminate();
+        mj_deleteData(data);
+        mj_deleteModel(model);
+        return -1;
+    }
+
+    // Position RGBD window next to main window
+    glfwSetWindowPos(rgbd_window, 1050, 0);
+
+    // Initialize main window context
+    glfwMakeContextCurrent(main_window);
     glfwSwapInterval(1); // Enable vsync
     
-    // Make sure window is focused and visible
-    glfwShowWindow(window);
-    glfwFocusWindow(window);
+    // Make sure main window is focused and visible
+    glfwShowWindow(main_window);
+    glfwShowWindow(rgbd_window);
+    glfwFocusWindow(main_window);
 
     std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
     std::cout << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
 
-    // Find camera (optional for visualization)
-    int camera_id = -1;
-    if (model->ncam > 0) {
-        camera_id = mj_name2id(model, mjOBJ_CAMERA, camera_name.c_str());
-        if (camera_id == -1) {
-            std::cout << "Camera '" << camera_name << "' not found, using first available camera" << std::endl;
-            camera_id = 0; // Use first camera
-        } else {
-            std::cout << "Found camera '" << camera_name << "' with ID: " << camera_id << std::endl;
-        }
-    } else {
-        std::cout << "No cameras in model, visualization only" << std::endl;
-    }
-    std::cout << "Model has " << model->nbody << " bodies, " << model->ngeom << " geometries" << std::endl;
+    // // Find camera (optional for visualization)
+    // int camera_id = -1;
+    // if (model->ncam > 0) {
+    //     camera_id = mj_name2id(model, mjOBJ_CAMERA, camera_name.c_str());
+    //     if (camera_id == -1) {
+    //         std::cout << "Camera '" << camera_name << "' not found, using first available camera" << std::endl;
+    //         camera_id = 0; // Use first camera
+    //     } else {
+    //         std::cout << "Found camera '" << camera_name << "' with ID: " << camera_id << std::endl;
+    //     }
+    // } else {
+    //     std::cout << "No cameras in model, visualization only" << std::endl;
+    // }
+    // std::cout << "Model has " << model->nbody << " bodies, " << model->ngeom << " geometries" << std::endl;
     
     // Debug: print some body and geom info
     for (int i = 0; i < model->nbody && i < 5; i++) {
@@ -158,8 +176,8 @@ int main(int argc, char** argv) {
     std::cout << "Visualization initialized. Camera distance: " << cam.distance << std::endl;
     
     // Add mouse interaction
-    glfwSetWindowUserPointer(window, &cam);
-    glfwSetCursorPosCallback(window, [](GLFWwindow* win, double x, double y) {
+    glfwSetWindowUserPointer(main_window, &cam);
+    glfwSetCursorPosCallback(main_window, [](GLFWwindow* win, double x, double y) {
         static double lastx = x, lasty = y;
         static bool button_left = false, button_right = false;
         
@@ -197,7 +215,7 @@ int main(int argc, char** argv) {
     std::cout << "Mouse controls enabled: Right-click+drag to rotate, Left-click+drag to zoom" << std::endl;
     
     // Add keyboard controls
-    glfwSetKeyCallback(window, [](GLFWwindow* win, int key, int scancode, int action, int mods) {
+    glfwSetKeyCallback(main_window, [](GLFWwindow* win, int key, int scancode, int action, int mods) {
         mjvCamera* cam = static_cast<mjvCamera*>(glfwGetWindowUserPointer(win));
         
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
@@ -238,19 +256,35 @@ int main(int argc, char** argv) {
     std::cout << "Keyboard controls: ESC=quit, R=reset camera, 1/2=preset views" << std::endl;
 
     // Temporarily disable RGBD camera to test basic visualization
-    /*
+
+    std::string camera_name_ = "camera";
+
+    std::cout << "Model has " << model->ncam << " cameras" << std::endl;
+    for (int i = 0; i < model->ncam; i++) {
+        const char* cam_name = mj_id2name(model, mjOBJ_CAMERA, i);
+        std::cout << "  Camera " << i << ": " << (cam_name ? cam_name : "unnamed") << std::endl;
+    }
+
+    int camera_id = mj_name2id(model, mjOBJ_CAMERA, camera_name_.c_str());
+    if (camera_id == -1) {
+        std::cerr << "Camera '" << camera_name_ << "' not found in model" << std::endl;
+    } else {
+        std::cout << "Found camera '" << camera_name_ << "' with ID: " << camera_id << std::endl;
+    }
+    
     MujocoRGBDCamera rgbd_camera;
     if (!rgbd_camera.initialize(model, camera_id)) {
         std::cerr << "Failed to initialize RGBD camera" << std::endl;
         mjr_freeContext(&context);
-        glfwDestroyWindow(window);
+        glfwDestroyWindow(main_window);
+        glfwDestroyWindow(rgbd_window);
         glfwTerminate();
         mj_deleteData(data);
         mj_deleteModel(model);
         return -1;
     }
     std::cout << "RGBD camera initialized successfully" << std::endl;
-    */
+    
     
     std::cout << "Starting main loop..." << std::endl;
     
@@ -258,7 +292,7 @@ int main(int argc, char** argv) {
     auto last_time = std::chrono::high_resolution_clock::now();
     
     // Main loop
-    while (running && !glfwWindowShouldClose(window)) {
+    while (running && !glfwWindowShouldClose(main_window) && !glfwWindowShouldClose(rgbd_window)) {
         glfwPollEvents();
 
         // Run simulation step
@@ -267,14 +301,15 @@ int main(int argc, char** argv) {
         // Update scene - need to pass perturbation and camera properly
         mjv_updateScene(model, data, &opt, NULL, &cam, mjCAT_ALL, &scn);
 
-        // Render
-        mjrRect viewport;
-        glfwGetFramebufferSize(window, &viewport.width, &viewport.height);
-        viewport.left = 0;
-        viewport.bottom = 0;
+        // ===== RENDER TO MAIN SIMULATION WINDOW =====
+        glfwMakeContextCurrent(main_window);
+        mjrRect main_viewport;
+        glfwGetFramebufferSize(main_window, &main_viewport.width, &main_viewport.height);
+        main_viewport.left = 0;
+        main_viewport.bottom = 0;
         
-        // Set OpenGL viewport
-        glViewport(0, 0, viewport.width, viewport.height);
+        // Set OpenGL viewport for main window
+        glViewport(0, 0, main_viewport.width, main_viewport.height);
         
         // Enable depth testing
         glEnable(GL_DEPTH_TEST);
@@ -283,17 +318,89 @@ int main(int argc, char** argv) {
         glClearColor(0.2f, 0.3f, 0.4f, 1.0f);  // Sky blue background
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        mjr_render(viewport, &scn, &context);
+        // Render main simulation
+        mjr_render(main_viewport, &scn, &context);
         
         // Check for OpenGL errors
         GLenum error = glGetError();
         if (error != GL_NO_ERROR) {
-            std::cerr << "OpenGL error: " << error << std::endl;
+            std::cerr << "OpenGL error in main window: " << error << std::endl;
         }
+        
+        // ===== CAPTURE RGBD DATA (using main window context with separate scene) =====
+        if (!rgbd_camera.capture(model, data, &context)) {
+            std::cerr << "Warning: Failed to capture RGBD data" << std::endl;
+        }
+
+        // ===== RENDER TO RGBD WINDOW (Camera Frame Only) =====
+        glfwMakeContextCurrent(rgbd_window);
+        mjrRect rgbd_viewport;
+        glfwGetFramebufferSize(rgbd_window, &rgbd_viewport.width, &rgbd_viewport.height);
+        rgbd_viewport.left = 0;
+        rgbd_viewport.bottom = 0;
+        
+        // Set viewport for RGBD window
+        glViewport(0, 0, rgbd_viewport.width, rgbd_viewport.height);
+        
+        // Clear RGBD window with dark background
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // Display the captured camera frame as a texture
+        cv::Mat color_image = rgbd_camera.getColorImage();
+        cv::Mat depth_image = rgbd_camera.getDepthImage();
+        
+        if (!color_image.empty()) {
+            // Set up 2D orthographic projection for displaying the image
+            glMatrixMode(GL_PROJECTION);
+            glLoadIdentity();
+            glOrtho(0, rgbd_viewport.width, 0, rgbd_viewport.height, -1, 1);
+            
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
+            
+            // Disable depth test for 2D rendering
+            glDisable(GL_DEPTH_TEST);
+            
+            // Calculate scaling to fit image in window
+            float scale_x = (float)rgbd_viewport.width / color_image.cols;
+            float scale_y = (float)rgbd_viewport.height / color_image.rows;
+            float scale = std::min(scale_x, scale_y);
+            
+            int display_width = (int)(color_image.cols * scale);
+            int display_height = (int)(color_image.rows * scale);
+            int offset_x = (rgbd_viewport.width - display_width) / 2;
+            int offset_y = (rgbd_viewport.height - display_height) / 2;
+            
+            // Simple color display - render the camera frame
+            glEnable(GL_TEXTURE_2D);
+            GLuint texture;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            
+            // Upload color image data
+            cv::Mat rgb_image;
+            cv::cvtColor(color_image, rgb_image, cv::COLOR_BGR2RGB);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, rgb_image.cols, rgb_image.rows, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb_image.data);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            
+            // Render textured quad
+            glBegin(GL_QUADS);
+            glTexCoord2f(0.0f, 1.0f); glVertex2f(offset_x, offset_y);
+            glTexCoord2f(1.0f, 1.0f); glVertex2f(offset_x + display_width, offset_y);
+            glTexCoord2f(1.0f, 0.0f); glVertex2f(offset_x + display_width, offset_y + display_height);
+            glTexCoord2f(0.0f, 0.0f); glVertex2f(offset_x, offset_y + display_height);
+            glEnd();
+            
+            glDeleteTextures(1, &texture);
+            glDisable(GL_TEXTURE_2D);
+        }    
         
         // Debug: print every 100 frames for easier adjustment
         if (frame_count % 100 == 0) {
-            std::cout << "Rendering frame " << frame_count << " viewport: " << viewport.width << "x" << viewport.height << std::endl;
+            std::cout << "Rendering frame " << frame_count << " main viewport: " << main_viewport.width << "x" << main_viewport.height << std::endl;
+            std::cout << "RGBD viewport: " << rgbd_viewport.width << "x" << rgbd_viewport.height << std::endl;
             std::cout << "Camera position - azimuth: " << cam.azimuth << ", elevation: " << cam.elevation << ", distance: " << cam.distance << std::endl;
             std::cout << "Camera lookat: [" << cam.lookat[0] << ", " << cam.lookat[1] << ", " << cam.lookat[2] << "]" << std::endl;
             std::cout << "Scene objects: " << scn.ngeom << " geoms" << std::endl;
@@ -323,12 +430,17 @@ int main(int argc, char** argv) {
                 
                 last_time = current_time;
             }
+
+            auto data = rgbd_camera.generatePointCloud();
+
+                
         /*
         }
         */
 
-        // Swap buffers
-        glfwSwapBuffers(window);
+        // Swap buffers for both windows
+        glfwSwapBuffers(main_window);
+        glfwSwapBuffers(rgbd_window);
 
         // Run at ~30 FPS
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
@@ -338,7 +450,8 @@ int main(int argc, char** argv) {
     std::cout << "Cleaning up..." << std::endl;
     mjv_freeScene(&scn);
     mjr_freeContext(&context);
-    glfwDestroyWindow(window);
+    glfwDestroyWindow(main_window);
+    glfwDestroyWindow(rgbd_window);
     glfwTerminate();
     mj_deleteData(data);
     mj_deleteModel(model);

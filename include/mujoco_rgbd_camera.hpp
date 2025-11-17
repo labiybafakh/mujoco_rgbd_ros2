@@ -6,6 +6,7 @@
 // #include <pcl/point_types.h>
 // #include <pcl/point_cloud.h>
 #include <memory>
+#include <vector>
 
 struct CameraIntrinsics {
     double fx, fy;  // focal lengths
@@ -16,6 +17,10 @@ struct CameraIntrinsics {
 struct DepthParams {
     double z_near, z_far;  // clipping planes
     double extent;         // depth scale
+};
+
+struct Point3D {
+    float x, y, z;
 };
 
 class MujocoRGBDCamera {
@@ -42,7 +47,7 @@ public:
     const cv::Mat& getDepthImage() const { return depth_image_; }
     
     // Generate point clouds (temporarily disabled)
-    // pcl::PointCloud<pcl::PointXYZ>::Ptr generatePointCloud() const;
+    std::vector<Point3D> generatePointCloud() const;
     // pcl::PointCloud<pcl::PointXYZRGB>::Ptr generateColorPointCloud() const;
     
     // Get camera parameters
@@ -58,6 +63,8 @@ private:
     cv::Mat linearizeDepth(const cv::Mat& raw_depth) const;
     void allocateBuffers(int width, int height);
     void releaseBuffers();
+    void initializeScene(const mjModel* model);
+    void cleanupScene();
     
     // Camera parameters
     CameraIntrinsics intrinsics_;
@@ -75,4 +82,8 @@ private:
     // Buffer management
     bool buffers_allocated_;
     int buffer_width_, buffer_height_;
+    
+    // RGBD-specific scene
+    mjvScene* rgbd_scene_;
+    bool scene_initialized_;
 };
